@@ -9,3 +9,4 @@ MHI
 
    mhi
    topology
+   sahara_protocol
