@@ -744,6 +744,9 @@ static const struct smb5_register smb5_init_seq[] = {
 	{ .addr = CHARGING_ENABLE_CMD,
 	  .mask = CHARGING_ENABLE_CMD_BIT,
 	  .val = CHARGING_ENABLE_CMD_BIT },
+	{ .addr = FAST_CHARGE_CURRENT_CFG,
+	  .mask = FAST_CHARGE_CURRENT_SETTING_MASK,
+	  .val = 0x72 },
 	/* Enable BC1P2 Src detect */
 	{ .addr = USBIN_OPTIONS_1_CFG,
 	  .mask = BC1P2_SRC_DETECT_BIT,
