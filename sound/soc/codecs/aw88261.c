@@ -11,6 +11,7 @@
 #include <linux/i2c.h>
 #include <linux/firmware.h>
 #include <linux/gpio/consumer.h>
+#include <linux/of.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <sound/soc.h>
@@ -26,11 +27,20 @@ static const struct regmap_config aw88261_remap_config = {
 	.val_format_endian = REGMAP_ENDIAN_BIG,
 };
 
+static bool aw88261_is_pipa(void)
+{
+	return of_machine_is_compatible("xiaomi,pipa") ||
+	       of_machine_is_compatible("qcom,sm8250-mtp");
+}
+
 static void aw88261_dev_set_volume(struct aw_device *aw_dev, unsigned int value)
 {
 	struct aw_volume_desc *vol_desc = &aw_dev->volume_desc;
 	unsigned int real_value, volume;
 	unsigned int reg_value;
+
+	if (aw88261_is_pipa())
+		value = (value > 3) ? (value - 3) : 0;
 
 	volume = min((value + vol_desc->init_volume), (unsigned int)AW88261_MUTE_VOL);
 	real_value = DB_TO_REG_VAL(volume);
@@ -90,6 +100,9 @@ static void aw88261_dev_fade_out(struct aw_device *aw_dev)
 
 static void aw88261_dev_i2s_tx_enable(struct aw_device *aw_dev, bool flag)
 {
+	if (aw88261_is_pipa())
+		return;
+
 	if (flag)
 		regmap_update_bits(aw_dev->regmap, AW88261_I2SCFG1_REG,
 			~AW88261_I2STXEN_MASK, AW88261_I2STXEN_ENABLE_VALUE);
@@ -151,6 +164,20 @@ static int aw88261_dev_get_iis_status(struct aw_device *aw_dev)
 	ret = regmap_read(aw_dev->regmap, AW88261_SYSST_REG, &reg_val);
 	if (ret)
 		return ret;
+
+	if (aw88261_is_pipa()) {
+		bool pll_lock = (reg_val & BIT(0)) == BIT(0);
+		bool clks_available = (reg_val & BIT(5)) == 0;
+
+		if (pll_lock && clks_available)
+			return 0;
+
+		dev_err(aw_dev->dev,
+			"IIS signal is not OK, pll_lock:%d, clks_available:%d, reg_val:0x%04x",
+			pll_lock, clks_available, reg_val);
+		return -EINVAL;
+	}
+
 	if ((reg_val & AW88261_BIT_PLL_CHECK) != AW88261_BIT_PLL_CHECK) {
 		dev_err(aw_dev->dev, "check pll lock fail,reg_val:0x%04x", reg_val);
 		return -EINVAL;
@@ -229,6 +256,27 @@ static int aw88261_dev_check_mode2_pll(struct aw_device *aw_dev)
 static int aw88261_dev_check_syspll(struct aw_device *aw_dev)
 {
 	int ret;
+
+	if (aw88261_is_pipa()) {
+		int retry_count = 0;
+		const int max_retries = 20;
+
+		while (retry_count < max_retries) {
+			ret = aw88261_dev_check_mode1_pll(aw_dev);
+			if (!ret)
+				break;
+			retry_count++;
+		}
+
+		if (retry_count == max_retries) {
+			dev_err(aw_dev->dev,
+				"Failed to stabilize PLL after %d attempts",
+				max_retries);
+			return -ETIMEDOUT;
+		}
+
+		return ret;
+	}
 
 	ret = aw88261_dev_check_mode1_pll(aw_dev);
 	if (ret) {
@@ -397,10 +445,12 @@ static int aw88261_dev_reg_update(struct aw88261 *aw88261,
 	struct aw_device *aw_dev = aw88261->aw_pa;
 	struct aw_volume_desc *vol_desc = &aw_dev->volume_desc;
 	unsigned int read_val, efcheck_val, read_vol;
+	struct device_node *np = aw_dev->dev->of_node;
 	int data_len, i, ret;
 	int16_t *reg_data;
 	u16 reg_val;
 	u8 reg_addr;
+	u32 slot_num = aw_dev->channel;
 
 	if (!len || !data) {
 		dev_err(aw_dev->dev, "reg data is null or len is 0");
@@ -419,6 +469,33 @@ static int aw88261_dev_reg_update(struct aw88261 *aw88261,
 		reg_addr = reg_data[i];
 		reg_val = reg_data[i + 1];
 
+		if (aw88261_is_pipa()) {
+			switch (reg_addr) {
+			case AW88261_ID_REG:
+			case AW88261_SYSST_REG:
+			case AW88261_SYSINT_REG:
+			case AW88261_SYSINTM_REG:
+			case AW88261_SYSCTRL_REG:
+			case AW88261_SYSCTRL2_REG:
+			case AW88261_I2SCTRL1_REG:
+			case AW88261_I2SCTRL2_REG:
+			case AW88261_I2SCTRL3_REG:
+			case AW88261_DACCFG1_REG:
+			case AW88261_DACCFG2_REG:
+			case AW88261_DACCFG3_REG:
+			case AW88261_DACCFG4_REG:
+			case AW88261_DACST_REG:
+			case AW88261_VBAT_REG:
+			case AW88261_TEMP_REG:
+			case AW88261_PVDD_REG:
+			case AW88261_BSTCTRL1_REG:
+			case AW88261_BSTCTRL2_REG:
+				break;
+			default:
+				continue;
+			}
+		}
+
 		if (reg_addr == AW88261_SYSCTRL_REG) {
 			aw88261->amppd_st = reg_val & (~AW88261_AMPPD_MASK);
 			ret = regmap_read(aw_dev->regmap, reg_addr, &read_val);
@@ -427,13 +504,17 @@ static int aw88261_dev_reg_update(struct aw88261 *aw88261,
 
 			/* keep all three bits from current hw status */
 			read_val &= (~AW88261_AMPPD_MASK) | (~AW88261_PWDN_MASK) |
-								(~AW88261_HMUTE_MASK);
-			reg_val &= (AW88261_AMPPD_MASK & AW88261_PWDN_MASK & AW88261_HMUTE_MASK);
+				    (~AW88261_HMUTE_MASK);
+			reg_val &= (AW88261_AMPPD_MASK | AW88261_PWDN_MASK |
+				    AW88261_HMUTE_MASK);
 			reg_val |= read_val;
 
 			/* enable uls hmute */
 			reg_val &= AW88261_ULS_HMUTE_MASK;
 			reg_val |= AW88261_ULS_HMUTE_ENABLE_VALUE;
+
+			if (aw88261_is_pipa())
+				reg_val = 0x3240;
 		}
 
 		if (reg_addr == AW88261_DBGCTRL_REG) {
@@ -451,6 +532,17 @@ static int aw88261_dev_reg_update(struct aw88261 *aw88261,
 			reg_val |= AW88261_I2STXEN_DISABLE_VALUE;
 		}
 
+		if (aw88261_is_pipa() && reg_addr == AW88261_I2SCTRL1_REG)
+			reg_val = 0x04e8;
+
+		if (aw88261_is_pipa() && reg_addr == AW88261_I2SCTRL2_REG) {
+			of_property_read_u32(np, "rx_slot", &slot_num);
+			reg_val = 0x5000 | (slot_num << 4) | slot_num;
+		}
+
+		if (aw88261_is_pipa() && reg_addr == AW88261_I2SCTRL3_REG)
+			reg_val = 0x00f6;
+
 		if (reg_addr == AW88261_SYSCTRL2_REG) {
 			read_vol = (reg_val & (~AW88261_VOL_MASK)) >>
 				AW88261_VOL_START_BIT;
@@ -466,9 +558,11 @@ static int aw88261_dev_reg_update(struct aw88261 *aw88261,
 			break;
 	}
 
-	ret = aw88261_dev_set_vcalb(aw_dev);
-	if (ret)
-		return ret;
+	if (!aw88261_is_pipa()) {
+		ret = aw88261_dev_set_vcalb(aw_dev);
+		if (ret)
+			return ret;
+	}
 
 	if (aw_dev->prof_cur != aw_dev->prof_index)
 		vol_desc->ctl_volume = 0;
@@ -582,7 +676,8 @@ static int aw88261_dev_start(struct aw88261 *aw88261)
 	if (aw88261->amppd_st)
 		aw88261_dev_amppd(aw_dev, true);
 
-	aw88261_reg_force_set(aw88261);
+	if (!aw88261_is_pipa())
+		aw88261_reg_force_set(aw88261);
 
 	/* close uls mute */
 	aw88261_dev_uls_hmute(aw_dev, false);
@@ -708,7 +803,7 @@ static void aw88261_start(struct aw88261 *aw88261, bool sync_start)
 	if (sync_start == AW88261_SYNC_START)
 		aw88261_start_pa(aw88261);
 	else
-		queue_delayed_work(system_dfl_wq,
+		queue_delayed_work(aw88261_is_pipa() ? system_wq : system_dfl_wq,
 			&aw88261->start_work,
 			AW88261_START_WORK_DELAY_MS);
 }
@@ -1108,10 +1203,12 @@ static int aw88261_dev_init(struct aw88261 *aw88261, struct aw_container *aw_cfg
 		return ret;
 	}
 
-	ret = aw88261_frcset_check(aw88261);
-	if (ret) {
-		dev_err(aw_dev->dev, "aw88261_frcset_check ret = %d\n", ret);
-		return ret;
+	if (!aw88261_is_pipa()) {
+		ret = aw88261_frcset_check(aw88261);
+		if (ret) {
+			dev_err(aw_dev->dev, "aw88261_frcset_check ret = %d\n", ret);
+			return ret;
+		}
 	}
 
 	aw88261_dev_clear_int_status(aw_dev);
@@ -1266,8 +1363,12 @@ static int aw88261_init(struct aw88261 *aw88261, struct i2c_client *i2c, struct 
 	int ret;
 
 	ret = devm_regulator_get_enable(&i2c->dev, "dvdd");
-	if (ret)
+	if (ret && !aw88261_is_pipa())
 		return dev_err_probe(&i2c->dev, ret, "Failed to enable dvdd supply\n");
+	if (ret && aw88261_is_pipa())
+		dev_warn(&i2c->dev,
+			 "Failed to enable dvdd supply, continuing on pipa: %d\n",
+			 ret);
 
 	/* read chip id */
 	ret = regmap_read(regmap, AW88261_ID_REG, &chip_id);
