@@ -1356,6 +1356,10 @@ static int hi846_set_ctrl(struct v4l2_ctrl *ctrl)
 	ret = pm_runtime_get_if_in_use(&client->dev);
 	if (!ret || ret == -EAGAIN)
 		return 0;
+	if (ret < 0)
+		return ret;
+
+	ret = 0;
 
 	switch (ctrl->id) {
 	case V4L2_CID_ANALOGUE_GAIN:
@@ -1647,7 +1651,7 @@ static int hi846_power_on(struct hi846 *hi846)
 	usleep_range(30, 60);
 	if (hi846->rst_gpio)
 		gpiod_set_value_cansleep(hi846->rst_gpio, 0);
-	usleep_range(30, 60);
+	usleep_range(5000, 6000);
 
 	return 0;
 
