@@ -24,7 +24,8 @@
 #include <linux/proc_fs.h>
 #include <linux/input/mt.h>
 #include <linux/debugfs.h>
-#include <linux/of_gpio.h>
+#include <linux/gpio/consumer.h>
+#include <linux/gpio.h>
 #include <linux/of_irq.h>
 
 
@@ -653,10 +654,26 @@ static int32_t nvt_parse_dt(struct device *dev)
 	int32_t ret = 0;
 
 #if NVT_TOUCH_SUPPORT_HW_RST
-	ts->reset_gpio = of_get_named_gpio_flags(np, "novatek,reset-gpio", 0, &ts->reset_flags);
+	{
+		struct gpio_desc *rst_desc = gpiod_get_index(dev, "novatek,reset", 0, GPIOD_ASIS);
+		if (!IS_ERR(rst_desc)) {
+			ts->reset_gpio = desc_to_gpio(rst_desc);
+			gpiod_put(rst_desc);
+		} else {
+			ts->reset_gpio = -EINVAL;
+		}
+	}
 	NVT_LOG("novatek,reset-gpio=%d\n", ts->reset_gpio);
 #endif
-	ts->irq_gpio = of_get_named_gpio(np, "novatek,irq-gpio", 0);
+	{
+		struct gpio_desc *irq_desc = gpiod_get_index(dev, "novatek,irq", 0, GPIOD_ASIS);
+		if (!IS_ERR(irq_desc)) {
+			ts->irq_gpio = desc_to_gpio(irq_desc);
+			gpiod_put(irq_desc);
+		} else {
+			ts->irq_gpio = -EINVAL;
+		}
+	}
 	NVT_LOG("novatek,irq-gpio=%d\n", ts->irq_gpio);
 
 	ts->pen_support = of_property_read_bool(np, "novatek,pen-support");

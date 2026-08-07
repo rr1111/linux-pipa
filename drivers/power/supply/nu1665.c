@@ -21,7 +21,28 @@
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/sched.h>
-#include <linux/of_gpio.h>
+#include <linux/gpio/consumer.h>
+#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
+#include <linux/of.h>
+
+static int nu1665_of_get_gpio(struct device_node *np, const char *propname, int index)
+{
+	struct of_phandle_args args;
+	struct gpio_device *gdev;
+	int ret, gpio;
+
+	ret = of_parse_phandle_with_fixed_args(np, propname, 1, index, &args);
+	if (ret)
+		return ret;
+	gdev = gpio_device_find_by_fwnode(of_fwnode_handle(args.np));
+	of_node_put(args.np);
+	if (!gdev)
+		return -ENODEV;
+	gpio = gpio_device_get_base(gdev) + args.args[0];
+	gpio_device_put(gdev);
+	return gpio;
+}
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/interrupt.h>
@@ -1507,7 +1528,7 @@ static int nuvolta_1665_parse_dt(struct nuvolta_1665_chg *chip)
 		return -EINVAL;
 	}
 
-	chip->tx_on_gpio = of_get_named_gpio(node, "reverse_chg_ovp_gpio", 0);
+	chip->tx_on_gpio = nu1665_of_get_gpio(node, "reverse_chg_ovp_gpio", 0);
 	dev_err(chip->dev, "[%s] print tx_on gpio %d\n", __func__, chip->tx_on_gpio);
 	if (!gpio_is_valid(chip->tx_on_gpio)) {
 		dev_err(chip->dev, "[%s] fail_tx_on gpio %d\n", __func__,
@@ -1515,7 +1536,7 @@ static int nuvolta_1665_parse_dt(struct nuvolta_1665_chg *chip)
 		return -EINVAL;
 	}
 
-	chip->irq_gpio = of_get_named_gpio(node, "rx_irq_gpio", 0);
+	chip->irq_gpio = nu1665_of_get_gpio(node, "rx_irq_gpio", 0);
 	dev_err(chip->dev, "[%s] print irq_gpio %d\n", __func__, chip->irq_gpio);
 	if (!gpio_is_valid(chip->irq_gpio)) {
 		dev_err(chip->dev, "[%s] fail_irq_gpio %d\n", __func__,
@@ -1524,7 +1545,7 @@ static int nuvolta_1665_parse_dt(struct nuvolta_1665_chg *chip)
 	}
 
 	chip->reverse_boost_gpio =
-		of_get_named_gpio(node, "reverse_boost_gpio", 0);
+		nu1665_of_get_gpio(node, "reverse_boost_gpio", 0);
 	dev_err(chip->dev, "[%s] print reverse_boost_gpio %d\n", __func__,
 		    chip->reverse_boost_gpio);
 	if (!gpio_is_valid(chip->reverse_boost_gpio)) {
@@ -1533,7 +1554,7 @@ static int nuvolta_1665_parse_dt(struct nuvolta_1665_chg *chip)
 		return -EINVAL;
 	}
 
-	chip->hall3_gpio = of_get_named_gpio(node, "hall,int3", 0);
+	chip->hall3_gpio = nu1665_of_get_gpio(node, "hall,int3", 0);
 	dev_err(chip->dev, "[%s] print chip->hall3_gpio %d\n", __func__,
 		    chip->hall3_gpio);
 	if ((!gpio_is_valid(chip->hall3_gpio))) {
@@ -1542,7 +1563,7 @@ static int nuvolta_1665_parse_dt(struct nuvolta_1665_chg *chip)
 		return -EINVAL;
 	}
 
-	chip->hall4_gpio = of_get_named_gpio(node, "hall,int4", 0);
+	chip->hall4_gpio = nu1665_of_get_gpio(node, "hall,int4", 0);
 	dev_err(chip->dev, "[%s] print chip->hall4_gpio %d\n", __func__,
 		    chip->hall4_gpio);
 	if ((!gpio_is_valid(chip->hall4_gpio))) {
