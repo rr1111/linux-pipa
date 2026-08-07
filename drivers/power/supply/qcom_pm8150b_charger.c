@@ -308,6 +308,8 @@ struct smb5_chip {
 	struct power_supply *chg_psy;
 };
 
+static bool bypass_charging;
+
 static enum power_supply_property smb5_properties[] = {
 	POWER_SUPPLY_PROP_MANUFACTURER,
 	POWER_SUPPLY_PROP_MODEL_NAME,
@@ -318,6 +320,7 @@ static enum power_supply_property smb5_properties[] = {
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_USB_TYPE,
+	POWER_SUPPLY_PROP_INPUT_SUSPEND,
 };
 
 static int smb5_get_prop_usb_online(struct smb5_chip *chip, int *val)
@@ -572,6 +575,70 @@ static int smb5_get_prop_health(struct smb5_chip *chip, int *val)
 	return 0;
 }
 
+static int smb5_get_prop_input_suspend(struct smb5_chip *chip, int *val)
+{
+	unsigned int stat;
+	int rc;
+
+	if (bypass_charging) {
+		*val = 2;
+		return 0;
+	}
+
+	rc = regmap_read(chip->regmap, chip->base + USBIN_CMD_IL, &stat);
+	if (rc < 0) {
+		dev_err(chip->dev, "Couldn't read USBIN_CMD_IL rc=%d\n", rc);
+		return rc;
+	}
+
+	*val = !!(stat & USBIN_SUSPEND_BIT);
+	return 0;
+}
+
+static int smb5_set_prop_input_suspend(struct smb5_chip *chip, int val)
+{
+	int rc;
+
+	if (val == 2) {
+		rc = regmap_update_bits(chip->regmap, chip->base + USBIN_CMD_IL,
+					USBIN_SUSPEND_BIT, 0);
+		if (rc < 0) {
+			dev_err(chip->dev, "Couldn't unsuspend USB rc=%d\n", rc);
+			return rc;
+		}
+		rc = regmap_update_bits(chip->regmap,
+					chip->base + CHARGING_ENABLE_CMD,
+					CHARGING_ENABLE_CMD_BIT, 0);
+		if (rc < 0) {
+			dev_err(chip->dev, "Couldn't disable charging rc=%d\n", rc);
+			return rc;
+		}
+		bypass_charging = true;
+		power_supply_changed(chip->chg_psy);
+		return 0;
+	}
+
+	bypass_charging = false;
+
+	rc = regmap_update_bits(chip->regmap, chip->base + USBIN_CMD_IL,
+				USBIN_SUSPEND_BIT, val ? USBIN_SUSPEND_BIT : 0);
+	if (rc < 0) {
+		dev_err(chip->dev, "Couldn't %s USB rc=%d\n",
+			val ? "suspend" : "resume", rc);
+		return rc;
+	}
+
+	rc = regmap_update_bits(chip->regmap, chip->base + CHARGING_ENABLE_CMD,
+				CHARGING_ENABLE_CMD_BIT, CHARGING_ENABLE_CMD_BIT);
+	if (rc < 0) {
+		dev_err(chip->dev, "Couldn't enable charging rc=%d\n", rc);
+		return rc;
+	}
+
+	power_supply_changed(chip->chg_psy);
+	return 0;
+}
+
 static int smb5_get_property(struct power_supply *psy,
 			     enum power_supply_property psp,
 			     union power_supply_propval *val)
@@ -601,6 +668,8 @@ static int smb5_get_property(struct power_supply *psy,
 		return smb5_get_prop_health(chip, &val->intval);
 	case POWER_SUPPLY_PROP_USB_TYPE:
 		return smb5_apsd_get_charger_type(chip, &val->intval);
+	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
+		return smb5_get_prop_input_suspend(chip, &val->intval);
 	default:
 		dev_err(chip->dev, "invalid property: %d\n", psp);
 		return -EINVAL;
@@ -616,6 +685,8 @@ static int smb5_set_property(struct power_supply *psy,
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
 		return smb5_set_current_limit(chip, val->intval);
+	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
+		return smb5_set_prop_input_suspend(chip, val->intval);
 	default:
 		dev_err(chip->dev, "No setter for property: %d\n", psp);
 		return -EINVAL;
@@ -627,6 +698,7 @@ static int smb5_property_is_writable(struct power_supply *psy,
 {
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
+	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
 		return 1;
 	default:
 		return 0;
