@@ -1074,6 +1074,22 @@
 		};
 	};
 
+	displayport-rx-dai-link {
+		link-name = "DisplayPort Playback";
+
+		cpu {
+			sound-dai = <&q6afedai DISPLAY_PORT_RX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&mdss_dp>;
+		};
+	};
+
 	speaker-dai-link {
 		link-name = "Tertiary TDM Playback";
 		no-pcm;

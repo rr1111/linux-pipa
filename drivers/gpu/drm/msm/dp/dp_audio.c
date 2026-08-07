@@ -6,8 +6,10 @@
 
 #define pr_fmt(fmt)	"[drm-dp] %s: " fmt, __func__
 
+#include <linux/delay.h>
 #include <linux/platform_device.h>
 
+#include <drm/drm_eld.h>
 #include <drm/display/drm_dp_helper.h>
 #include <drm/drm_edid.h>
 
@@ -27,6 +29,34 @@ struct msm_dp_audio_private {
 
 	struct msm_dp_audio msm_dp_audio;
 };
+
+#define MSM_DP_AUDIO_STARTUP_TIMEOUT_US	500000
+#define MSM_DP_AUDIO_STARTUP_POLL_US	20000
+
+static bool msm_dp_audio_eld_ready(struct drm_connector *connector)
+{
+	const u8 *eld = connector->eld;
+	u8 ver;
+	bool ready = false;
+
+	mutex_lock(&connector->eld_mutex);
+
+	ver = eld[DRM_ELD_VER] & DRM_ELD_VER_MASK;
+	if (ver != DRM_ELD_VER_CEA861D && ver != DRM_ELD_VER_CANNED)
+		goto out;
+
+	if (drm_eld_size(eld) < DRM_ELD_HEADER_BLOCK_SIZE)
+		goto out;
+
+	if (!drm_eld_sad_count(eld))
+		goto out;
+
+	ready = drm_eld_get_conn_type(eld) == DRM_ELD_CONN_TYPE_DP;
+out:
+	mutex_unlock(&connector->eld_mutex);
+
+	return ready;
+}
 
 static inline u32 msm_dp_read_link(struct msm_dp_audio_private *audio, u32 offset)
 {
@@ -306,6 +336,39 @@ int msm_dp_audio_prepare(struct drm_bridge *bridge,
 
 end:
 	return rc;
+}
+
+int msm_dp_audio_startup(struct drm_bridge *bridge,
+			 struct drm_connector *connector)
+{
+	struct msm_dp *msm_dp_display = to_dp_bridge(bridge)->msm_dp_display;
+	unsigned int waited_us;
+	u8 eld_ver;
+	int sad_count;
+
+	if (!connector)
+		return -EINVAL;
+
+	for (waited_us = 0; waited_us < MSM_DP_AUDIO_STARTUP_TIMEOUT_US;
+	     waited_us += MSM_DP_AUDIO_STARTUP_POLL_US) {
+		if (msm_dp_display->power_on && msm_dp_display->link_ready &&
+		    msm_dp_audio_eld_ready(connector))
+			return 0;
+
+		usleep_range(MSM_DP_AUDIO_STARTUP_POLL_US,
+			     MSM_DP_AUDIO_STARTUP_POLL_US + 5000);
+	}
+
+	mutex_lock(&connector->eld_mutex);
+	eld_ver = connector->eld[DRM_ELD_VER] & DRM_ELD_VER_MASK;
+	sad_count = drm_eld_sad_count(connector->eld);
+	mutex_unlock(&connector->eld_mutex);
+
+	DRM_ERROR("audio startup timed out: power_on=%d link_ready=%d eld_ver=0x%x sad_count=%d\n",
+		  msm_dp_display->power_on, msm_dp_display->link_ready,
+		  eld_ver, sad_count);
+
+	return -ETIMEDOUT;
 }
 
 void msm_dp_audio_shutdown(struct drm_bridge *bridge,

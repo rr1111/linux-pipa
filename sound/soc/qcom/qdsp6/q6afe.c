@@ -31,6 +31,8 @@
 #define AFE_SVC_CMD_SET_PARAM		0x000100f3
 #define AFE_PORT_CMDRSP_GET_PARAM_V2	0x00010106
 #define AFE_PARAM_ID_HDMI_CONFIG	0x00010210
+#define AFE_PARAM_ID_HDMI_DP_MST_VID_IDX_CFG	0x000102B5
+#define AFE_PARAM_ID_HDMI_DPTX_IDX_CFG	0x000102B6
 #define AFE_MODULE_AUDIO_DEV_INTERFACE	0x0001020C
 #define AFE_MODULE_TDM			0x0001028A
 
@@ -79,6 +81,7 @@
 
 /* Port IDs */
 #define AFE_API_VERSION_HDMI_CONFIG	0x1
+#define AFE_API_VERSION_DISPLAY_STREAM_INDEX	0x1
 #define AFE_PORT_ID_MULTICHAN_HDMI_RX	0x100E
 #define AFE_PORT_ID_HDMI_OVER_DP_RX	0x6020
 
@@ -393,6 +396,16 @@ struct afe_port_cmd_device_stop {
 	u16 port_id;
 	u16 reserved;
 /* Reserved for 32-bit alignment. This field must be set to 0.*/
+} __packed;
+
+struct afe_display_stream_idx {
+	u32 minor_version;
+	u32 stream_idx;
+} __packed;
+
+struct afe_display_ctl_idx {
+	u32 minor_version;
+	u32 ctl_idx;
 } __packed;
 
 struct afe_port_param_data_v2 {
@@ -1657,6 +1670,33 @@ void q6afe_cdc_dma_port_prepare(struct q6afe_port *port,
 		dma_cfg->active_channels_mask = (1 << cfg->num_channels) - 1;
 }
 EXPORT_SYMBOL_GPL(q6afe_cdc_dma_port_prepare);
+
+static int q6afe_dp_port_set_display_stream(struct q6afe_port *port,
+					    u32 stream_idx, u32 ctl_idx)
+{
+	struct afe_display_stream_idx stream_cfg = {
+		.minor_version = AFE_API_VERSION_DISPLAY_STREAM_INDEX,
+		.stream_idx = stream_idx,
+	};
+	struct afe_display_ctl_idx ctl_cfg = {
+		.minor_version = AFE_API_VERSION_DISPLAY_STREAM_INDEX,
+		.ctl_idx = ctl_idx,
+	};
+	int ret;
+
+	ret = q6afe_port_set_param_v2(port, &stream_cfg,
+				      AFE_PARAM_ID_HDMI_DP_MST_VID_IDX_CFG,
+				      AFE_MODULE_AUDIO_DEV_INTERFACE,
+				      sizeof(stream_cfg));
+	if (ret)
+		return ret;
+
+	return q6afe_port_set_param_v2(port, &ctl_cfg,
+				       AFE_PARAM_ID_HDMI_DPTX_IDX_CFG,
+				       AFE_MODULE_AUDIO_DEV_INTERFACE,
+				       sizeof(ctl_cfg));
+}
+
 /**
  * q6afe_port_start() - Start a afe port
  *
@@ -1672,6 +1712,16 @@ int q6afe_port_start(struct q6afe_port *port)
 	int ret, param_id = port->cfg_type;
 	struct apr_pkt *pkt;
 	int pkt_size;
+
+	if (port_id == AFE_PORT_ID_HDMI_OVER_DP_RX) {
+		ret = q6afe_dp_port_set_display_stream(port, 0, 0);
+		if (ret) {
+			dev_err(afe->dev,
+				"AFE DP stream setup for port 0x%x failed %d\n",
+				port_id, ret);
+			return ret;
+		}
+	}
 
 	ret  = q6afe_port_set_param_v2(port, &port->port_cfg, param_id,
 				       AFE_MODULE_AUDIO_DEV_INTERFACE,

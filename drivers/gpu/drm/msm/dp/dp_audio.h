@@ -49,9 +49,10 @@ int msm_dp_audio_prepare(struct drm_bridge *bridge,
 			 struct drm_connector *connector,
 			 struct hdmi_codec_daifmt *daifmt,
 			 struct hdmi_codec_params *params);
+int msm_dp_audio_startup(struct drm_bridge *bridge,
+			 struct drm_connector *connector);
 void msm_dp_audio_shutdown(struct drm_bridge *bridge,
 			   struct drm_connector *connector);
 
 #endif /* _DP_AUDIO_H_ */
-
 
