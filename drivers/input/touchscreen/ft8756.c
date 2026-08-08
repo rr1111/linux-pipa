@@ -66,6 +66,7 @@
 #define POINT_DATA_LEN 62
 
 static struct drm_panel_follower_funcs ft8756_panel_follower_funcs;
+static const struct attribute_group ft8756_attr_group;
 
 struct ft8756_abs_object {
 	u16 x;
@@ -88,6 +89,7 @@ struct ft8756_ts {
 	struct ft8756_abs_object abs_obj;
 
 	struct drm_panel_follower panel_follower;
+	bool sleeping;
 };
 
 /*
@@ -545,6 +547,10 @@ skip_regulators:
 		devm_drm_panel_add_follower(dev, &ts->panel_follower);
 	}
 
+	ret = devm_device_add_group(dev, &ft8756_attr_group);
+	if (ret)
+		return ret;
+
 	dev_info(dev, "FT8756 touchscreen initialized\n");
 	return 0;
 }
@@ -612,6 +618,53 @@ static int panel_unpreparing(struct drm_panel_follower *follower)
 static struct drm_panel_follower_funcs ft8756_panel_follower_funcs = {
 	.panel_prepared = panel_prepared,
 	.panel_unpreparing = panel_unpreparing,
+};
+
+static ssize_t ft8756_sleep_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct ft8756_ts *ts = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%d\n", ts->sleeping);
+}
+
+static ssize_t ft8756_sleep_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct ft8756_ts *ts = dev_get_drvdata(dev);
+	bool sleep;
+	int ret;
+
+	ret = kstrtobool(buf, &sleep);
+	if (ret)
+		return ret;
+
+	if (sleep == ts->sleeping)
+		return count;
+
+	if (sleep) {
+		disable_irq(ts->irq);
+		ft8756_internal_pm_suspend(dev);
+		ts->sleeping = true;
+	} else {
+		ft8756_reset(ts);
+		enable_irq(ts->irq);
+		ts->sleeping = false;
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR(sleep, 0644, ft8756_sleep_show, ft8756_sleep_store);
+
+static struct attribute *ft8756_attributes[] = {
+	&dev_attr_sleep.attr,
+	NULL,
+};
+
+static const struct attribute_group ft8756_attr_group = {
+	.attrs = ft8756_attributes,
 };
 
 static const struct spi_device_id ft8756_spi_ids[] = {
