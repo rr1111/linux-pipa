@@ -1222,7 +1222,7 @@ static int imx582_suspend(struct device *dev)
 
 	clk_disable_unprepare(imx582->mclk);
 
-	gpiod_set_value_cansleep(imx582->reset_gpio, 0);
+	gpiod_set_value_cansleep(imx582->reset_gpio, 1);
 
 	ret = regulator_bulk_disable(ARRAY_SIZE(imx582->supplies),
 					imx582->supplies);
@@ -1248,7 +1248,7 @@ static int imx582_resume(struct device *dev)
 		return ret;
 	}
 
-	gpiod_set_value_cansleep(imx582->reset_gpio, 1);
+	gpiod_set_value_cansleep(imx582->reset_gpio, 0);
 
 	clk_prepare_enable(imx582->mclk);
 	usleep_range(12000, 13000);
@@ -1400,6 +1400,10 @@ static int imx582_probe(struct i2c_client *client)
 		dev_err_probe(&client->dev, ret, "failed to get gpios");
 		goto error_vreg_disable;
 	}
+
+	usleep_range(10000, 11000);
+
+	gpiod_set_value_cansleep(imx582->reset_gpio, 0);
 
 	imx582->mclk = devm_clk_get(&client->dev, "mclk");
 	if (IS_ERR(imx582->mclk)) {

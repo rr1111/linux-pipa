@@ -520,7 +520,7 @@
 		assigned-clocks = <&camcc CAM_CC_MCLK0_CLK>;
 		assigned-clock-rates = <19200000>;
 
-		reset-gpios = <&tlmm 93 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&tlmm 93 GPIO_ACTIVE_LOW>;
 
 		vio-supply = <&vreg_l5c_1p8>;
 		vana-supply = <&vreg_l7p>;
@@ -618,11 +618,11 @@
 		assigned-clocks = <&camcc CAM_CC_MCLK2_CLK>;
 		assigned-clock-rates = <19200000>;
 
-		reset-gpios = <&tlmm 78 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&tlmm 78 GPIO_ACTIVE_LOW>;
 
-		vio-supply = <&vreg_l5c_1p8>;
-		vana-supply = <&vreg_l3p>;
-		vdig-supply = <&vreg_l3c_1p2>;
+		dovdd-supply = <&vreg_l5c_1p8>;
+		avdd-supply = <&vreg_l3p>;
+		dvdd-supply = <&vreg_l3c_1p2>;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&cam_imx355_default>;
