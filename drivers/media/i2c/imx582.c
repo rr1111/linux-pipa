@@ -61,6 +61,12 @@
 /* external clock */
 #define IMX582_EXT_CLK			19200000
 
+#define IMX582_PIXEL_RATE_MIN		401920000
+#define IMX582_PIXEL_RATE_MAX		721920000
+
+#define IMX582_NATIVE_WIDTH		8000
+#define IMX582_NATIVE_HEIGHT		6000
+
 struct imx582_reg {
 	u16 address;
 	u8 val;
@@ -87,6 +93,10 @@ struct imx582_mode {
 
 	/* index of link frequency */
 	u32 link_freq_index;
+
+	u64 pixel_rate;
+
+	struct v4l2_rect crop;
 
 	/* Default register values */
 	struct imx582_reg_list reg_list;
@@ -489,16 +499,16 @@ static const struct imx582_reg mode_4000x2256_regs[] = {
 	{ 0x0114, 0x03 },
 	{ 0x0342, 0x1e },
 	{ 0x0343, 0xc0 },
-	{ 0x0340, 0x0b },
-	{ 0x0341, 0xee },
+	{ 0x0340, 0x09 },
+	{ 0x0341, 0x24 },
 	{ 0x0344, 0x00 },
 	{ 0x0345, 0x00 },
-	{ 0x0346, 0x00 },
-	{ 0x0347, 0x00 },
+	{ 0x0346, 0x02 },
+	{ 0x0347, 0xe8 },
 	{ 0x0348, 0x1f },
 	{ 0x0349, 0x3f },
-	{ 0x034a, 0x17 },
-	{ 0x034b, 0x6f },
+	{ 0x034a, 0x14 },
+	{ 0x034b, 0x87 },
 	{ 0x0900, 0x01 },
 	{ 0x0901, 0x22 },
 	{ 0x0902, 0x08 },
@@ -513,12 +523,12 @@ static const struct imx582_reg mode_4000x2256_regs[] = {
 	{ 0x040b, 0x00 },
 	{ 0x040c, 0x0f },
 	{ 0x040d, 0xa0 },
-	{ 0x040e, 0x0b },
-	{ 0x040f, 0xb8 },
+	{ 0x040e, 0x08 },
+	{ 0x040f, 0xd0 },
 	{ 0x034c, 0x0f },
 	{ 0x034d, 0xa0 },
-	{ 0x034e, 0x0b },
-	{ 0x034f, 0xb8 },
+	{ 0x034e, 0x08 },
+	{ 0x034f, 0xd0 },
 	{ 0x0301, 0x05 },
 	{ 0x0303, 0x02 },
 	{ 0x0305, 0x03 },
@@ -721,7 +731,8 @@ static const char * const imx582_test_pattern_menu[] = {
 };
 
 static const s64 link_freq_menu_items[] = {
-	720000000
+	597600000,
+	357900000,
 };
 
 /* Mode configs */
@@ -733,6 +744,13 @@ static const struct imx582_mode supported_modes[] = {
 		.fll_min = 3054,
 		.llp = 7872,
 		.link_freq_index = 0,
+		.pixel_rate = 721920000,
+		.crop = {
+			.left = 0,
+			.top = 0,
+			.width = 8000,
+			.height = 6000,
+		},
 		.reg_list = {
 			.num_of_regs = ARRAY_SIZE(mode_4000x3000_regs),
 			.regs = mode_4000x3000_regs,
@@ -743,8 +761,15 @@ static const struct imx582_mode supported_modes[] = {
 		.height = 2256,
 		.fll_def = 2340,
 		.fll_min = 2340,
-		.llp = 4592,
+		.llp = 7872,
 		.link_freq_index = 0,
+		.pixel_rate = 721920000,
+		.crop = {
+			.left = 0,
+			.top = 744,
+			.width = 8000,
+			.height = 4512,
+		},
 		.reg_list = {
 			.num_of_regs = ARRAY_SIZE(mode_4000x2256_regs),
 			.regs = mode_4000x2256_regs,
@@ -753,10 +778,17 @@ static const struct imx582_mode supported_modes[] = {
 	{
 		.width = 1920,
 		.height = 1080,
-		.fll_def = 1150,
-		.fll_min = 1150,
+		.fll_def = 1188,
+		.fll_min = 1188,
 		.llp = 2912,
-		.link_freq_index = 0,
+		.link_freq_index = 1,
+		.pixel_rate = 401920000,
+		.crop = {
+			.left = 160,
+			.top = 832,
+			.width = 7680,
+			.height = 4320,
+		},
 		.reg_list = {
 			.num_of_regs = ARRAY_SIZE(mode_1920x1080_regs),
 			.regs = mode_1920x1080_regs,
@@ -882,7 +914,6 @@ imx582_set_pad_format(struct v4l2_subdev *sd,
 	s32 vblank_def;
 	s32 vblank_min;
 	s64 h_blank;
-	u64 pixel_rate;
 	u32 height;
 
 	mutex_lock(&imx582->mutex);
@@ -903,9 +934,8 @@ imx582_set_pad_format(struct v4l2_subdev *sd,
 		*framefmt = fmt->format;
 	} else {
 		imx582->cur_mode = mode;
-		pixel_rate = link_freq_menu_items[imx582->cur_mode->link_freq_index] * 2 * 4;
-		do_div(pixel_rate, 10);
-		__v4l2_ctrl_s_ctrl_int64(imx582->pixel_rate, pixel_rate);
+		__v4l2_ctrl_s_ctrl(imx582->link_freq, mode->link_freq_index);
+		__v4l2_ctrl_s_ctrl_int64(imx582->pixel_rate, mode->pixel_rate);
 		/* Update limits and set FPS to default */
 		height = imx582->cur_mode->height;
 		vblank_def = imx582->cur_mode->fll_def - height;
@@ -964,6 +994,10 @@ static int imx582_set_ctrl(struct v4l2_ctrl *ctrl)
 					imx582->exposure->minimum,
 					max, imx582->exposure->step, max);
 		break;
+	case V4L2_CID_LINK_FREQ:
+	case V4L2_CID_PIXEL_RATE:
+	case V4L2_CID_HBLANK:
+		return 0;
 	}
 
 	/*
@@ -1052,6 +1086,43 @@ static int imx582_enum_frame_size(struct v4l2_subdev *sd,
 	fse->max_height = fse->min_height;
 
 	return 0;
+}
+
+static int imx582_get_selection(struct v4l2_subdev *sd,
+				struct v4l2_subdev_state *sd_state,
+				struct v4l2_subdev_selection *sel)
+{
+	struct imx582 *imx582 = to_imx582(sd);
+	const struct imx582_mode *mode;
+	struct v4l2_mbus_framefmt *fmt;
+
+	switch (sel->target) {
+	case V4L2_SEL_TGT_CROP:
+		mutex_lock(&imx582->mutex);
+		if (sel->which == V4L2_SUBDEV_FORMAT_TRY) {
+			fmt = v4l2_subdev_state_get_format(sd_state, sel->pad);
+			mode = v4l2_find_nearest_size(supported_modes,
+						      ARRAY_SIZE(supported_modes),
+						      width, height,
+						      fmt->width, fmt->height);
+		} else {
+			mode = imx582->cur_mode;
+		}
+		sel->r = mode->crop;
+		mutex_unlock(&imx582->mutex);
+		return 0;
+
+	case V4L2_SEL_TGT_NATIVE_SIZE:
+	case V4L2_SEL_TGT_CROP_DEFAULT:
+	case V4L2_SEL_TGT_CROP_BOUNDS:
+		sel->r.left = 0;
+		sel->r.top = 0;
+		sel->r.width = IMX582_NATIVE_WIDTH;
+		sel->r.height = IMX582_NATIVE_HEIGHT;
+		return 0;
+	}
+
+	return -EINVAL;
 }
 
 static int imx582_do_get_pad_format(struct imx582 *imx582,
@@ -1202,6 +1273,7 @@ static const struct v4l2_subdev_pad_ops imx582_pad_ops = {
 	.enum_frame_size = imx582_enum_frame_size,
 	.get_fmt = imx582_get_pad_format,
 	.set_fmt = imx582_set_pad_format,
+	.get_selection = imx582_get_selection,
 };
 
 static const struct v4l2_subdev_ops imx582_subdev_ops = {
@@ -1275,7 +1347,6 @@ static int imx582_init_controls(struct imx582 *imx582)
 	s64 vblank_def;
 	s64 vblank_min;
 	s64 hblank;
-	u64 pixel_rate;
 	const struct imx582_mode *mode;
 	u32 max;
 	int ret;
@@ -1293,13 +1364,12 @@ static int imx582_init_controls(struct imx582 *imx582)
 	if (imx582->link_freq)
 		imx582->link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 
-	/* pixel_rate = link_freq * 2 * nr_of_lanes / bits_per_sample */
-	pixel_rate = link_freq_menu_items[0] * 2 * 4;
-	do_div(pixel_rate, 10);
 	/* By default, PIXEL_RATE is read only */
 	imx582->pixel_rate = v4l2_ctrl_new_std(ctrl_hdlr, &imx582_ctrl_ops,
-						V4L2_CID_PIXEL_RATE, pixel_rate,
-						pixel_rate, 1, pixel_rate);
+						V4L2_CID_PIXEL_RATE,
+						IMX582_PIXEL_RATE_MIN,
+						IMX582_PIXEL_RATE_MAX, 1,
+						imx582->cur_mode->pixel_rate);
 
 	/* Initialize vblank/hblank/exposure parameters based on current mode */
 	mode = imx582->cur_mode;
