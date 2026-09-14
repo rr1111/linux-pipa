@@ -430,14 +430,18 @@ static int cci_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 		goto err;
 
 	for (i = 0; i < num; i++) {
-		if (msgs[i].flags & I2C_M_RD)
-			ret = cci_i2c_read(cci, cci_master->master,
-					   msgs[i].addr, msgs[i].buf,
-					   msgs[i].len);
-		else
-			ret = cci_i2c_write(cci, cci_master->master,
-					    msgs[i].addr, msgs[i].buf,
-					    msgs[i].len);
+		int retry = 1;
+
+		do {
+			if (msgs[i].flags & I2C_M_RD)
+				ret = cci_i2c_read(cci, cci_master->master,
+						   msgs[i].addr, msgs[i].buf,
+						   msgs[i].len);
+			else
+				ret = cci_i2c_write(cci, cci_master->master,
+						    msgs[i].addr, msgs[i].buf,
+						    msgs[i].len);
+		} while (ret == -ETIMEDOUT && retry--);
 
 		if (ret < 0)
 			break;
