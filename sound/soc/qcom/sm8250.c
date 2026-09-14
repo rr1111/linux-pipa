@@ -8,6 +8,7 @@
 #include <sound/soc-dapm.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
+#include <sound/cs35l41.h>
 #include <linux/soundwire/sdw.h>
 #include <sound/jack.h>
 #include <linux/input-event-codes.h>
@@ -182,9 +183,23 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 
 		for_each_rtd_codec_dais(rtd, j, codec_dai) {
 			ret = snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
-			snd_soc_dai_set_sysclk(codec_dai, 0, TDM_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
 			if (ret < 0) {
 				dev_err(rtd->dev, "TDM fmt err:%d\n", ret);
+				return ret;
+			}
+
+			ret = snd_soc_dai_set_sysclk(codec_dai, CS35L41_CLKID_SCLK,
+						     TDM_BCLK_RATE, SND_SOC_CLOCK_IN);
+			if (ret < 0) {
+				dev_err(rtd->dev, "Fail to set dai sysclk, err:%d\n", ret);
+				return ret;
+			}
+
+			ret = snd_soc_component_set_sysclk(codec_dai->component,
+							   CS35L41_CLKID_SCLK, 0,
+							   TDM_BCLK_RATE, SND_SOC_CLOCK_IN);
+			if (ret < 0) {
+				dev_err(rtd->dev, "Fail to set component sysclk, err:%d\n", ret);
 				return ret;
 			}
 
