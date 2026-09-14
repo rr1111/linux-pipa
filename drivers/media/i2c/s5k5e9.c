@@ -34,6 +34,7 @@ struct s5k5e9_mode {
 	u32 hts;
 	u32 vts;
 	s64 link_freq;
+	u64 pixel_rate;
 	u32 lane_count;
 	u32 depth;
 	const struct s5k5e9_reg_list reg_list;
@@ -142,7 +143,8 @@ static struct s5k5e9_mode s5k5e9_modes[] = {
 		.height = 1944,
 		.hts = 3112,
 		.vts = 2030,
-		.link_freq = 480000000,
+		.link_freq = 438400000,
+		.pixel_rate = 189866667,
 		.lane_count = 2,
 		.depth = 10,
 		.reg_list = {
@@ -312,7 +314,6 @@ static int s5k5e9_set_fmt(struct v4l2_subdev *sd,
 {
 	struct s5k5e9 *s5k5e9 = to_s5k5e9(sd);
 	struct s5k5e9_mode *mode;
-	u64 pixel_rate;
 	u32 v_blank;
 	u32 h_blank;
 
@@ -329,8 +330,7 @@ static int s5k5e9_set_fmt(struct v4l2_subdev *sd,
 		*v4l2_subdev_state_get_format(state, 0) =  fmt->format;
 	} else {
 		s5k5e9->cur_mode = mode;
-		pixel_rate = mode->link_freq * 2 * mode->lane_count / mode->depth;
-		__v4l2_ctrl_s_ctrl_int64(s5k5e9->pixel_rate, pixel_rate);
+		__v4l2_ctrl_s_ctrl_int64(s5k5e9->pixel_rate, mode->pixel_rate);
 		/* Update limits and set FPS to default */
 		v_blank = mode->vts - mode->height;
 		__v4l2_ctrl_modify_range(s5k5e9->vblank, v_blank,
@@ -353,9 +353,6 @@ static int s5k5e9_get_selection(struct v4l2_subdev *sd,
 
 	switch (sel->target) {
 	case V4L2_SEL_TGT_CROP:
-		sel->r = *v4l2_subdev_state_get_crop(sd_state, sel->pad);
-		return 0;
-
 	case V4L2_SEL_TGT_NATIVE_SIZE:
 		sel->r.top = 0;
 		sel->r.left = 0;
@@ -564,7 +561,6 @@ static int s5k5e9_init_ctrls(struct s5k5e9 *s5k5e9)
 	struct v4l2_fwnode_device_properties props;
 	struct v4l2_ctrl *ctrl;
 	struct s5k5e9_mode *mode = s5k5e9->cur_mode;
-	u64 pixel_rate;
 	u32 h_blank;
 	u32 v_blank;
 	u32 exposure_max;
@@ -583,9 +579,8 @@ static int s5k5e9_init_ctrls(struct s5k5e9 *s5k5e9)
 	if (ctrl)
 		ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 
-	pixel_rate = mode->link_freq * 2 * mode->lane_count / mode->depth;
 	s5k5e9->pixel_rate = v4l2_ctrl_new_std(handler, NULL, V4L2_CID_PIXEL_RATE,
-			  0, pixel_rate, 1, pixel_rate);
+			  0, mode->pixel_rate, 1, mode->pixel_rate);
 
 	h_blank = mode->hts - mode->width;
 	s5k5e9->hblank = v4l2_ctrl_new_std(handler, NULL, V4L2_CID_HBLANK,
