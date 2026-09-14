@@ -53,7 +53,7 @@
 		charge-full-design-microamp-hours = <4520000>;
 		energy-full-design-microwatt-hours = <17500000>;
 		voltage-min-design-microvolt = <3400000>;
-		voltage-max-design-microvolt = <4460000>;
+		voltage-max-design-microvolt = <4450000>;
 	};
 
 	gpio_keys: gpio-keys {
