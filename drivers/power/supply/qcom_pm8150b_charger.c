@@ -258,6 +258,10 @@
 
 /* pmi8150b registers represent current in increments of 1/40th of an amp */
 #define CURRENT_SCALE_FACTOR		50000
+
+#define FLOAT_VOLTAGE_MIN_UV		3600000
+#define FLOAT_VOLTAGE_MAX_UV		4790000
+#define FLOAT_VOLTAGE_STEP_UV		10000
 /* clang-format on */
 
 enum charger_status {
@@ -885,7 +889,14 @@ static int smb5_probe(struct platform_device *pdev)
 		return dev_err_probe(chip->dev, rc,
 				     "Failed to init status change work\n");
 
-	rc = (chip->batt_info->voltage_max_design_uv - 3487500) / 7500 + 1;
+	if (chip->batt_info->voltage_max_design_uv < FLOAT_VOLTAGE_MIN_UV ||
+	    chip->batt_info->voltage_max_design_uv > FLOAT_VOLTAGE_MAX_UV)
+		return dev_err_probe(chip->dev, -EINVAL,
+				     "Invalid battery max voltage %d\n",
+				     chip->batt_info->voltage_max_design_uv);
+
+	rc = (chip->batt_info->voltage_max_design_uv - FLOAT_VOLTAGE_MIN_UV) /
+	     FLOAT_VOLTAGE_STEP_UV;
 	rc = regmap_update_bits(chip->regmap, chip->base + FLOAT_VOLTAGE_CFG,
 				FLOAT_VOLTAGE_SETTING_MASK, rc);
 	if (rc < 0)
