@@ -331,8 +331,16 @@ static int v4l2_async_create_ancillary_links(struct v4l2_async_notifier *n,
 	}
 
 	link = media_create_ancillary_link(&n->sd->entity, &sd->entity);
+	if (IS_ERR(link))
+		return PTR_ERR(link);
 
-	return IS_ERR(link) ? PTR_ERR(link) : 0;
+	if (sd->entity.function == MEDIA_ENT_F_LENS &&
+	    !device_link_add(sd->dev, n->sd->dev,
+			     DL_FLAG_STATELESS | DL_FLAG_PM_RUNTIME))
+		dev_warn(sd->dev, "failed to link power to %s\n",
+			 dev_name(n->sd->dev));
+
+	return 0;
 #else
 	return 0;
 #endif
@@ -474,6 +482,11 @@ static void v4l2_async_unbind_subdev_one(struct v4l2_async_notifier *notifier,
 {
 	list_move_tail(&asc->asc_entry, &notifier->waiting_list);
 	if (list_is_singular(&asc->asc_subdev_entry)) {
+#if IS_ENABLED(CONFIG_MEDIA_CONTROLLER)
+		if (notifier->sd &&
+		    asc->sd->entity.function == MEDIA_ENT_F_LENS)
+			device_link_remove(asc->sd->dev, notifier->sd->dev);
+#endif
 		v4l2_async_nf_call_unbind(notifier, asc->sd, asc);
 		v4l2_device_unregister_subdev(asc->sd);
 		asc->sd = NULL;
