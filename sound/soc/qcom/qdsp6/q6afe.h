@@ -190,6 +190,9 @@ struct q6afe_tdm_cfg {
 	u16	sync_mode;
 	u16	sync_src;
 	u16	nslots_per_frame;
+	u16	data_out_enable;
+	u16	invert_sync;
+	u16	data_delay;
 	u16	slot_width;
 	u16	slot_mask;
 	u32	data_align_type;
