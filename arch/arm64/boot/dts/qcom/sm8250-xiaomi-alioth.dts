@@ -530,6 +530,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&cam_imx582_default>;
 
+		power-domains = <&camcc TITAN_TOP_GDSC>;
+
 		orientation = <1>;
 		rotation = <270>;
 
@@ -580,6 +582,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&cam_s5k5e9_default>;
 
+		power-domains = <&camcc TITAN_TOP_GDSC>;
+
 		orientation = <1>;
 		rotation = <270>;
 
@@ -626,6 +630,8 @@
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&cam_imx355_default>;
+
+		power-domains = <&camcc TITAN_TOP_GDSC>;
 
 		orientation = <1>;
 		rotation = <270>;
