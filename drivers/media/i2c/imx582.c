@@ -1250,7 +1250,14 @@ static int imx582_resume(struct device *dev)
 
 	gpiod_set_value_cansleep(imx582->reset_gpio, 0);
 
-	clk_prepare_enable(imx582->mclk);
+	ret = clk_prepare_enable(imx582->mclk);
+	if (ret) {
+		dev_err(dev, "failed to enable mclk: %d\n", ret);
+		gpiod_set_value_cansleep(imx582->reset_gpio, 1);
+		regulator_bulk_disable(ARRAY_SIZE(imx582->supplies),
+				       imx582->supplies);
+		return ret;
+	}
 	usleep_range(12000, 13000);
 
 	return 0;
@@ -1412,7 +1419,11 @@ static int imx582_probe(struct i2c_client *client)
 		goto error_vreg_disable;
 	}
 
-	clk_prepare_enable(imx582->mclk);
+	ret = clk_prepare_enable(imx582->mclk);
+	if (ret) {
+		dev_err_probe(&client->dev, ret, "failed to enable mclk");
+		goto error_vreg_disable;
+	}
 	usleep_range(12000, 13000);
 
 	/* Check module identity */
