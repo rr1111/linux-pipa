@@ -208,9 +208,16 @@ static int dw9800_set_ctrl(struct v4l2_ctrl *ctrl)
 
 	if (ctrl->id == V4L2_CID_FOCUS_ABSOLUTE) {
 		struct i2c_client *client = v4l2_get_subdevdata(&dw9800_dev->sd);
+		int ret;
 
 		dw9800_dev->focus->val = ctrl->val;
-		return dw9800_set_dac(client, ctrl->val);
+		if (pm_runtime_get_if_in_use(&client->dev) <= 0)
+			return 0;
+
+		ret = dw9800_set_dac(client, ctrl->val);
+		pm_runtime_put(&client->dev);
+
+		return ret;
 	}
 
 	return -EINVAL;
@@ -287,13 +294,6 @@ static int dw9800_probe(struct i2c_client *client)
 		return rval;
 	}
 
-	rval = regulator_bulk_enable(ARRAY_SIZE(dw9800_supply_names),
-				dw9800_dev->supplies);
-	if (rval < 0) {
-		dev_err(&client->dev, "failed to enable regulators: %d\n", rval);
-		return rval;
-	}
-
 	dw9800_dev->sac_mode = DW9800_SAC_MODE_DEFAULT;
 	dw9800_dev->sac_timing = DW9800_SAC_TIME_DEFAULT;
 	dw9800_dev->clock_presc = DW9800_CLOCK_PRE_SCALE_DEFAULT;
@@ -332,15 +332,11 @@ static int dw9800_probe(struct i2c_client *client)
 	if (rval < 0)
 		goto err_cleanup;
 
-	pm_runtime_set_active(&client->dev);
 	pm_runtime_enable(&client->dev);
-	pm_runtime_idle(&client->dev);
 
 	return 0;
 
 err_cleanup:
-	regulator_bulk_disable(ARRAY_SIZE(dw9800_supply_names),
-			       dw9800_dev->supplies);
 	v4l2_ctrl_handler_free(&dw9800_dev->ctrls);
 	media_entity_cleanup(&dw9800_dev->sd.entity);
 
