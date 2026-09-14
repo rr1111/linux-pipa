@@ -540,7 +540,7 @@
 		port {
 			cam_imx582_ep: endpoint {
 				data-lanes = <1 2 3 4>;
-				link-frequencies = /bits/ 64 <720000000>;
+				link-frequencies = /bits/ 64 <597600000 357900000>;
 				remote-endpoint = <&csiphy1_ep>;
 			};
 		};
@@ -592,7 +592,7 @@
 		port {
 			cam_s5k5e9_ep: endpoint {
 				data-lanes = <1 2>;
-				link-frequencies = /bits/ 64 <480000000>;
+				link-frequencies = /bits/ 64 <438400000>;
 				remote-endpoint = <&csiphy0_ep>;
 			};
 		};
