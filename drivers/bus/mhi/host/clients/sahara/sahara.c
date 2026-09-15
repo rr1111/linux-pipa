@@ -40,10 +40,11 @@
 #define SAHARA_WRITE_DATA_CMD		0x14 /* Min protocol version 3.0 */
 
 #define SAHARA_PACKET_MAX_SIZE		0xffffU /* MHI_MAX_MTU */
-#define SAHARA_TRANSFER_MAX_SIZE	0x80000
+#define SAHARA_TRANSFER_MAX_SIZE	0x100000
 #define SAHARA_READ_MAX_SIZE		0xfff0U /* Avoid unaligned requests */
+#define SAHARA_READ_DATA_CHUNK		0x8000U
 #define SAHARA_NUM_TX_BUF		DIV_ROUND_UP(SAHARA_TRANSFER_MAX_SIZE,\
-							SAHARA_PACKET_MAX_SIZE)
+							SAHARA_READ_DATA_CHUNK)
 #define SAHARA_IMAGE_ID_NONE		U32_MAX
 
 #define SAHARA_VERSION			2
@@ -60,6 +61,8 @@
 #define SAHARA_END_OF_IMAGE_LENGTH	0x10
 #define SAHARA_DONE_LENGTH		0x8
 #define SAHARA_RESET_LENGTH		0x8
+#define SAHARA_MEM_DEBUG_LENGTH		0x10
+#define SAHARA_MEM_READ_LENGTH		0x10
 #define SAHARA_MEM_DEBUG64_LENGTH	0x18
 #define SAHARA_MEM_READ64_LENGTH	0x18
 #define SAHARA_COMMAND_READY_LENGTH	0x8
@@ -99,6 +102,14 @@ struct sahara_packet {
 			__le32 status;
 		} end_of_image;
 		struct {
+			__le32 table_address;
+			__le32 table_length;
+		} memory_debug;
+		struct {
+			__le32 memory_address;
+			__le32 memory_length;
+		} memory_read;
+		struct {
 			__le64 table_address;
 			__le64 table_length;
 		} memory_debug64;
@@ -120,6 +131,14 @@ struct sahara_packet {
 			__le32 mode;
 		} mode_switch;
 	};
+};
+
+struct sahara_debug_table_entry32 {
+	__le32	type;
+	__le32	address;
+	__le32	length;
+	char	description[SAHARA_TABLE_ENTRY_STR_LEN];
+	char	filename[SAHARA_TABLE_ENTRY_STR_LEN];
 };
 
 struct sahara_debug_table_entry64 {
@@ -203,7 +222,9 @@ struct sahara_context {
 	u64				dump_images_left;
 	u32				read_data_offset;
 	u32				read_data_length;
+	struct sahara_packet		*read_data_group_end;
 	bool				is_mem_dump_mode;
+	bool				is_mem_debug32;
 	bool				non_streaming;
 	const char			*fw_folder;
 	bool				is_cmd_mode;
@@ -634,13 +655,10 @@ static void sahara_command_processing(struct work_struct *work)
 	}
 }
 
-static int read_data_helper(struct sahara_context *context, int buf_index)
+static int read_data_helper(struct sahara_context *context, int buf_index,
+			    u32 pkt_data_len, bool eot)
 {
-	enum mhi_flags mhi_flag;
-	u32 pkt_data_len;
 	int ret;
-
-	pkt_data_len = min(context->read_data_length, SAHARA_PACKET_MAX_SIZE);
 
 	memcpy(context->tx[buf_index],
 	       &context->firmware->data[context->read_data_offset],
@@ -649,13 +667,9 @@ static int read_data_helper(struct sahara_context *context, int buf_index)
 	context->read_data_offset += pkt_data_len;
 	context->read_data_length -= pkt_data_len;
 
-	if (is_streaming(context) || !context->read_data_length)
-		mhi_flag = MHI_EOT;
-	else
-		mhi_flag = MHI_CHAIN;
-
 	ret = mhi_queue_buf(context->mhi_dev, DMA_TO_DEVICE,
-			    context->tx[buf_index], pkt_data_len, mhi_flag);
+			    context->tx[buf_index], pkt_data_len,
+			    eot ? MHI_EOT : MHI_CHAIN);
 	if (ret) {
 		dev_err(&context->mhi_dev->dev, "Unable to send read_data response %d\n", ret);
 		return ret;
@@ -664,11 +678,35 @@ static int read_data_helper(struct sahara_context *context, int buf_index)
 	return 0;
 }
 
+static void sahara_send_read_data_group(struct sahara_context *context)
+{
+	u32 group_len = min(context->read_data_length, SAHARA_TRANSFER_MAX_SIZE);
+	u32 pkt_data_len;
+	int i;
+
+	for (i = 0; i < SAHARA_NUM_TX_BUF && group_len; ++i) {
+		pkt_data_len = min(group_len, SAHARA_READ_DATA_CHUNK);
+		group_len -= pkt_data_len;
+		context->read_data_group_end = context->tx[i];
+		if (read_data_helper(context, i, pkt_data_len, !group_len))
+			break;
+	}
+}
+
+static void sahara_send_read_data(struct sahara_context *context)
+{
+	if (is_streaming(context))
+		read_data_helper(context, 0,
+				 min(context->read_data_length, SAHARA_PACKET_MAX_SIZE),
+				 true);
+	else
+		sahara_send_read_data_group(context);
+}
+
 static void sahara_read_data(struct sahara_context *context)
 {
 	u32 image_id, data_offset, data_len;
 	int ret;
-	int i;
 
 	dev_dbg(&context->mhi_dev->dev,
 		"READ_DATA cmd received. length:%d image:%d offset:%d data_length:%d\n",
@@ -702,13 +740,6 @@ static void sahara_read_data(struct sahara_context *context)
 	 * and is not needed here on error.
 	 */
 
-	if (context->non_streaming && data_len > SAHARA_TRANSFER_MAX_SIZE) {
-		dev_err(&context->mhi_dev->dev, "Malformed read_data packet - data len %d exceeds max xfer size %d\n",
-			data_len, SAHARA_TRANSFER_MAX_SIZE);
-		sahara_send_reset(context);
-		return;
-	}
-
 	if (data_offset >= context->firmware->size) {
 		dev_err(&context->mhi_dev->dev, "Malformed read_data packet - data offset %d exceeds file size %zu\n",
 			data_offset, context->firmware->size);
@@ -731,11 +762,7 @@ static void sahara_read_data(struct sahara_context *context)
 		return;
 	}
 
-	for (i = 0; i < SAHARA_NUM_TX_BUF && context->read_data_length; ++i) {
-		ret = read_data_helper(context, i);
-		if (ret)
-			break;
-	}
+	sahara_send_read_data_group(context);
 }
 
 static void sahara_end_of_image(struct sahara_context *context)
@@ -775,31 +802,65 @@ static void sahara_end_of_image(struct sahara_context *context)
 		dev_dbg(&context->mhi_dev->dev, "Unable to send done response %d\n", ret);
 }
 
-static void sahara_memory_debug64(struct sahara_context *context)
+static int sahara_send_memory_read(struct sahara_context *context, u64 address, u64 length)
 {
+	u32 packet_length;
+
+	if (context->is_mem_debug32) {
+		packet_length = SAHARA_MEM_READ_LENGTH;
+		context->tx[0]->cmd = cpu_to_le32(SAHARA_MEM_READ_CMD);
+		context->tx[0]->memory_read.memory_address = cpu_to_le32(address);
+		context->tx[0]->memory_read.memory_length = cpu_to_le32(length);
+	} else {
+		packet_length = SAHARA_MEM_READ64_LENGTH;
+		context->tx[0]->cmd = cpu_to_le32(SAHARA_MEM_READ64_CMD);
+		context->tx[0]->memory_read64.memory_address = cpu_to_le64(address);
+		context->tx[0]->memory_read64.memory_length = cpu_to_le64(length);
+	}
+	context->tx[0]->length = cpu_to_le32(packet_length);
+
+	return mhi_queue_buf(context->mhi_dev, DMA_TO_DEVICE, context->tx[0],
+			     packet_length, MHI_EOT);
+}
+
+static void sahara_memory_debug(struct sahara_context *context, bool is64)
+{
+	size_t entry_size;
+	u32 packet_length;
 	int ret;
 
-	dev_dbg(&context->mhi_dev->dev,
-		"MEMORY DEBUG64 cmd received. length:%d table_address:%#llx table_length:%#llx\n",
-		le32_to_cpu(context->rx->length),
-		le64_to_cpu(context->rx->memory_debug64.table_address),
-		le64_to_cpu(context->rx->memory_debug64.table_length));
+	if (is64) {
+		packet_length = SAHARA_MEM_DEBUG64_LENGTH;
+		entry_size = sizeof(struct sahara_debug_table_entry64);
+		context->dump_table_address =
+			le64_to_cpu(context->rx->memory_debug64.table_address);
+		context->dump_table_length =
+			le64_to_cpu(context->rx->memory_debug64.table_length);
+	} else {
+		packet_length = SAHARA_MEM_DEBUG_LENGTH;
+		entry_size = sizeof(struct sahara_debug_table_entry32);
+		context->dump_table_address = le32_to_cpu(context->rx->memory_debug.table_address);
+		context->dump_table_length = le32_to_cpu(context->rx->memory_debug.table_length);
+	}
 
-	if (le32_to_cpu(context->rx->length) != SAHARA_MEM_DEBUG64_LENGTH) {
-		dev_err(&context->mhi_dev->dev, "Malformed memory debug64 packet - length %d\n",
+	dev_dbg(&context->mhi_dev->dev,
+		"MEMORY DEBUG%s cmd received. length:%d table_address:%#llx table_length:%#llx\n",
+		is64 ? "64" : "", le32_to_cpu(context->rx->length),
+		context->dump_table_address, context->dump_table_length);
+
+	if (le32_to_cpu(context->rx->length) != packet_length) {
+		dev_err(&context->mhi_dev->dev, "Malformed memory debug packet - length %d\n",
 			le32_to_cpu(context->rx->length));
 		return;
 	}
 
-	context->dump_table_address = le64_to_cpu(context->rx->memory_debug64.table_address);
-	context->dump_table_length = le64_to_cpu(context->rx->memory_debug64.table_length);
-
-	if (context->dump_table_length % sizeof(struct sahara_debug_table_entry64) != 0 ||
-	    !context->dump_table_length) {
-		dev_err(&context->mhi_dev->dev, "Malformed memory debug64 packet - table length %lld\n",
+	if (context->dump_table_length % entry_size != 0 || !context->dump_table_length) {
+		dev_err(&context->mhi_dev->dev, "Malformed memory debug packet - table length %lld\n",
 			context->dump_table_length);
 		return;
 	}
+
+	context->is_mem_debug32 = !is64;
 
 	/*
 	 * From this point, the protocol flips. We make memory_read requests to
@@ -823,15 +884,10 @@ static void sahara_memory_debug64(struct sahara_context *context)
 		return;
 	}
 
-	context->tx[0]->cmd = cpu_to_le32(SAHARA_MEM_READ64_CMD);
-	context->tx[0]->length = cpu_to_le32(SAHARA_MEM_READ64_LENGTH);
-	context->tx[0]->memory_read64.memory_address = cpu_to_le64(context->dump_table_address);
-	context->tx[0]->memory_read64.memory_length = cpu_to_le64(context->dump_table_length);
-
 	context->rx_size_requested = context->dump_table_length;
 
-	ret = mhi_queue_buf(context->mhi_dev, DMA_TO_DEVICE, context->tx[0],
-			    SAHARA_MEM_READ64_LENGTH, MHI_EOT);
+	ret = sahara_send_memory_read(context, context->dump_table_address,
+				      context->dump_table_length);
 	if (ret)
 		dev_err(&context->mhi_dev->dev, "Unable to send read for dump table %d\n", ret);
 }
@@ -857,8 +913,11 @@ static void sahara_processing(struct work_struct *work)
 	case SAHARA_RESET_RESP_CMD:
 		/* Intentional do nothing as we don't need to exit an app */
 		break;
+	case SAHARA_MEM_DEBUG_CMD:
+		sahara_memory_debug(context, false);
+		break;
 	case SAHARA_MEM_DEBUG64_CMD:
-		sahara_memory_debug64(context);
+		sahara_memory_debug(context, true);
 		break;
 	case SAHARA_CMD_READY_CMD:
 		sahara_command_ready(context);
@@ -875,30 +934,53 @@ static void sahara_processing(struct work_struct *work)
 		dev_err(&context->mhi_dev->dev, "Unable to requeue rx buf %d\n", ret);
 }
 
+static void sahara_get_table_entry(struct sahara_context *context, u64 index,
+				   struct sahara_dump_table_entry *entry)
+{
+	struct sahara_debug_table_entry32 *entry32;
+	struct sahara_debug_table_entry64 *entry64;
+
+	if (context->is_mem_debug32) {
+		entry32 = (struct sahara_debug_table_entry32 *)context->rx + index;
+		entry->type = le32_to_cpu(entry32->type);
+		entry->address = le32_to_cpu(entry32->address);
+		entry->length = le32_to_cpu(entry32->length);
+		strscpy(entry->description, entry32->description, SAHARA_TABLE_ENTRY_STR_LEN);
+		strscpy(entry->filename, entry32->filename, SAHARA_TABLE_ENTRY_STR_LEN);
+	} else {
+		entry64 = (struct sahara_debug_table_entry64 *)context->rx + index;
+		entry->type = le64_to_cpu(entry64->type);
+		entry->address = le64_to_cpu(entry64->address);
+		entry->length = le64_to_cpu(entry64->length);
+		strscpy(entry->description, entry64->description, SAHARA_TABLE_ENTRY_STR_LEN);
+		strscpy(entry->filename, entry64->filename, SAHARA_TABLE_ENTRY_STR_LEN);
+	}
+}
+
 static void sahara_parse_dump_table(struct sahara_context *context)
 {
 	struct sahara_dump_table_entry *image_out_table;
-	struct sahara_debug_table_entry64 *dev_table;
 	struct sahara_memory_dump_meta_v1 *dump_meta;
+	struct sahara_dump_table_entry entry;
+	size_t entry_size;
 	u64 table_nents;
 	u64 dump_length;
 	u64 mul_bytes;
 	int ret;
 	u64 i;
 
-	table_nents = context->dump_table_length / sizeof(*dev_table);
+	if (context->is_mem_debug32)
+		entry_size = sizeof(struct sahara_debug_table_entry32);
+	else
+		entry_size = sizeof(struct sahara_debug_table_entry64);
+	table_nents = context->dump_table_length / entry_size;
 	context->dump_images_left = table_nents;
 	dump_length = 0;
 
-	dev_table = (struct sahara_debug_table_entry64 *)(context->rx);
 	for (i = 0; i < table_nents; ++i) {
-		/* Do not trust the device, ensure the strings are terminated */
-		dev_table[i].description[SAHARA_TABLE_ENTRY_STR_LEN - 1] = 0;
-		dev_table[i].filename[SAHARA_TABLE_ENTRY_STR_LEN - 1] = 0;
+		sahara_get_table_entry(context, i, &entry);
 
-		if (check_add_overflow(dump_length,
-				       le64_to_cpu(dev_table[i].length),
-				       &dump_length)) {
+		if (check_add_overflow(dump_length, entry.length, &dump_length)) {
 			/* Discard the dump */
 			sahara_send_reset(context);
 			return;
@@ -906,12 +988,8 @@ static void sahara_parse_dump_table(struct sahara_context *context)
 
 		dev_dbg(&context->mhi_dev->dev,
 			"Memory dump table entry %lld type: %lld address: %#llx length: %#llx description: \"%s\" filename \"%s\"\n",
-			i,
-			le64_to_cpu(dev_table[i].type),
-			le64_to_cpu(dev_table[i].address),
-			le64_to_cpu(dev_table[i].length),
-			dev_table[i].description,
-			dev_table[i].filename);
+			i, entry.type, entry.address, entry.length,
+			entry.description, entry.filename);
 	}
 
 	if (check_add_overflow(dump_length, (u64)sizeof(*dump_meta), &dump_length)) {
@@ -946,16 +1024,8 @@ static void sahara_parse_dump_table(struct sahara_context *context)
 	dump_meta->table_size = context->dump_table_length;
 
 	image_out_table = context->mem_dump + sizeof(*dump_meta);
-	for (i = 0; i < table_nents; ++i) {
-		image_out_table[i].type = le64_to_cpu(dev_table[i].type);
-		image_out_table[i].address = le64_to_cpu(dev_table[i].address);
-		image_out_table[i].length = le64_to_cpu(dev_table[i].length);
-		strscpy(image_out_table[i].description, dev_table[i].description,
-			SAHARA_TABLE_ENTRY_STR_LEN);
-		strscpy(image_out_table[i].filename,
-			dev_table[i].filename,
-			SAHARA_TABLE_ENTRY_STR_LEN);
-	}
+	for (i = 0; i < table_nents; ++i)
+		sahara_get_table_entry(context, i, &image_out_table[i]);
 
 	context->mem_dump_freespace = &image_out_table[i];
 
@@ -971,15 +1041,9 @@ static void sahara_parse_dump_table(struct sahara_context *context)
 
 	context->dump_image_offset = dump_length;
 
-	context->tx[0]->cmd = cpu_to_le32(SAHARA_MEM_READ64_CMD);
-	context->tx[0]->length = cpu_to_le32(SAHARA_MEM_READ64_LENGTH);
-	context->tx[0]->memory_read64.memory_address = cpu_to_le64(context->dump_image->address);
-	context->tx[0]->memory_read64.memory_length = cpu_to_le64(dump_length);
-
 	context->rx_size_requested = dump_length;
 
-	ret = mhi_queue_buf(context->mhi_dev, DMA_TO_DEVICE, context->tx[0],
-			    SAHARA_MEM_READ64_LENGTH, MHI_EOT);
+	ret = sahara_send_memory_read(context, context->dump_image->address, dump_length);
 	if (ret)
 		dev_err(&context->mhi_dev->dev, "Unable to send read for dump content %d\n", ret);
 }
@@ -1017,17 +1081,13 @@ static void sahara_parse_dump_image(struct sahara_context *context)
 	if (dump_length == SAHARA_END_OF_IMAGE_LENGTH)
 		dump_length = SAHARA_END_OF_IMAGE_LENGTH / 2;
 
-	context->tx[0]->cmd = cpu_to_le32(SAHARA_MEM_READ64_CMD);
-	context->tx[0]->length = cpu_to_le32(SAHARA_MEM_READ64_LENGTH);
-	context->tx[0]->memory_read64.memory_address =
-		cpu_to_le64(context->dump_image->address + context->dump_image_offset);
-	context->tx[0]->memory_read64.memory_length = cpu_to_le64(dump_length);
+	ret = sahara_send_memory_read(context,
+				      context->dump_image->address + context->dump_image_offset,
+				      dump_length);
 
 	context->dump_image_offset += dump_length;
 	context->rx_size_requested = dump_length;
 
-	ret = mhi_queue_buf(context->mhi_dev, DMA_TO_DEVICE, context->tx[0],
-			    SAHARA_MEM_READ64_LENGTH, MHI_EOT);
 	if (ret)
 		dev_err(&context->mhi_dev->dev,
 			"Unable to send read for dump content %d\n", ret);
@@ -1095,7 +1155,7 @@ static void sahara_read_data_processing(struct work_struct *work)
 {
 	struct sahara_context *context = container_of(work, struct sahara_context, read_data_work);
 
-	read_data_helper(context, 0);
+	sahara_send_read_data(context);
 }
 
 static int sahara_mhi_probe(struct mhi_device *mhi_dev, const struct mhi_device_id *id)
@@ -1212,7 +1272,8 @@ static void sahara_mhi_ul_xfer_cb(struct mhi_device *mhi_dev, struct mhi_result 
 {
 	struct sahara_context *context = dev_get_drvdata(&mhi_dev->dev);
 
-	if (!mhi_result->transaction_status && context->read_data_length && is_streaming(context))
+	if (!mhi_result->transaction_status && context->read_data_length &&
+	    (is_streaming(context) || mhi_result->buf_addr == context->read_data_group_end))
 		schedule_work(&context->read_data_work);
 }
 
