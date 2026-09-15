@@ -1040,6 +1040,13 @@
 	pinctrl-0 = <&pcie2_default_state &mdm2ap_default &ap2mdm_default>;
 	pinctrl-names = "default";
 	status = "okay";
+
+	pcie@0 {
+		modem@0 {
+			compatible = "pci17cb,0306";
+			reg = <0x10000 0x0 0x0 0x0 0x0>;
+		};
+	};
 };
 
 &pcie2_phy {
