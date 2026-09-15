@@ -1855,10 +1855,9 @@ void q6afe_port_put(struct q6afe_port *port)
 }
 EXPORT_SYMBOL_GPL(q6afe_port_put);
 
-int q6afe_unvote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
-			       uint32_t client_handle)
+static int __q6afe_unvote_lpass_core_hw(struct q6afe *afe, uint32_t hw_block_id,
+					uint32_t client_handle)
 {
-	struct q6afe *afe = dev_get_drvdata(dev->parent);
 	struct afe_cmd_remote_lpass_core_hw_devote_request *vote_cfg;
 	struct apr_pkt *pkt;
 	int ret = 0;
@@ -1888,16 +1887,22 @@ int q6afe_unvote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
 
 	return ret;
 }
+
+int q6afe_unvote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
+			       uint32_t client_handle)
+{
+	return __q6afe_unvote_lpass_core_hw(dev_get_drvdata(dev->parent),
+					    hw_block_id, client_handle);
+}
 EXPORT_SYMBOL(q6afe_unvote_lpass_core_hw);
 
-int q6afe_vote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
-			     const char *client_name, uint32_t *client_handle)
+static int __q6afe_vote_lpass_core_hw(struct q6afe *afe, uint32_t hw_block_id,
+				      const char *client_name, uint32_t *client_handle)
 {
-	struct q6afe *afe = dev_get_drvdata(dev->parent);
 	struct afe_cmd_remote_lpass_core_hw_vote_request *vote_cfg;
 	struct apr_pkt *pkt;
-	int ret = 0;
 	int pkt_size = APR_HDR_SIZE + sizeof(*vote_cfg);
+	int ret;
 
 	if (hw_block_id >= ARRAY_SIZE(afe->vote_handle))
 		return -EINVAL;
@@ -1923,21 +1928,52 @@ int q6afe_vote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
 
 	ret = afe_apr_send_pkt(afe, pkt, NULL,
 			       AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST);
-	if (ret) {
-		dev_err(afe->dev, "AFE failed to vote (%d)\n", hw_block_id);
+	if (ret)
 		return ret;
-	}
 
 	*client_handle = afe->vote_handle[hw_block_id];
 
 	return 0;
 }
+
+int q6afe_vote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
+			     const char *client_name, uint32_t *client_handle)
+{
+	struct q6afe *afe = dev_get_drvdata(dev->parent);
+	int ret;
+
+	ret = __q6afe_vote_lpass_core_hw(afe, hw_block_id, client_name,
+					 client_handle);
+	if (ret)
+		dev_err(afe->dev, "AFE failed to vote (%d)\n", hw_block_id);
+
+	return ret;
+}
 EXPORT_SYMBOL(q6afe_vote_lpass_core_hw);
+
+static int q6afe_wait_for_lpass_hw_vote(struct q6afe *afe)
+{
+	unsigned long timeout = jiffies + msecs_to_jiffies(TIMEOUT_MS);
+	u32 handle;
+
+	do {
+		if (!__q6afe_vote_lpass_core_hw(afe, Q6AFE_LPASS_CORE_HW_MACRO_BLOCK,
+						"q6afe", &handle)) {
+			__q6afe_unvote_lpass_core_hw(afe, Q6AFE_LPASS_CORE_HW_MACRO_BLOCK,
+						     handle);
+			return 0;
+		}
+		msleep(20);
+	} while (time_before(jiffies, timeout));
+
+	return -ETIMEDOUT;
+}
 
 static int q6afe_probe(struct apr_device *adev)
 {
 	struct q6afe *afe;
 	struct device *dev = &adev->dev;
+	int ret;
 
 	afe = devm_kzalloc(dev, sizeof(*afe), GFP_KERNEL);
 	if (!afe)
@@ -1952,6 +1988,11 @@ static int q6afe_probe(struct apr_device *adev)
 	spin_lock_init(&afe->port_list_lock);
 
 	dev_set_drvdata(dev, afe);
+
+	ret = q6afe_wait_for_lpass_hw_vote(afe);
+	if (ret)
+		return dev_err_probe(dev, -EPROBE_DEFER,
+				     "LPASS hardware vote not accepted\n");
 
 	return devm_of_platform_populate(dev);
 }
