@@ -382,6 +382,7 @@ struct q6afe {
 	wait_queue_head_t wait;
 	struct list_head port_list;
 	spinlock_t port_list_lock;
+	u32 vote_handle[Q6AFE_LPASS_CORE_HW_DCODEC_BLOCK + 1];
 };
 
 struct afe_port_cmd_device_start {
@@ -653,6 +654,10 @@ struct afe_cmd_remote_lpass_core_hw_vote_request {
 struct afe_cmd_remote_lpass_core_hw_devote_request {
 	uint32_t  hw_block_id;
 	uint32_t client_handle;
+} __packed;
+
+struct afe_cmd_rsp_remote_lpass_core_hw_vote_request {
+	u32 client_handle;
 } __packed;
 
 
@@ -999,17 +1004,27 @@ static int q6afe_callback(struct apr_device *adev, const struct apr_resp_pkt *da
 			afe->result.status = res->status;
 			wake_up(&afe->wait);
 			break;
+		case AFE_CMD_REMOTE_LPASS_CORE_HW_DEVOTE_REQUEST:
+			break;
 		default:
 			dev_err(afe->dev, "Unknown cmd 0x%x\n",	res->opcode);
 			break;
 		}
 	}
 		break;
-	case AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST:
+	case AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST: {
+		const struct afe_cmd_rsp_remote_lpass_core_hw_vote_request *rsp = data->payload;
+
+		if (data->payload_size < sizeof(*rsp))
+			break;
+
+		if (hdr->token < ARRAY_SIZE(afe->vote_handle))
+			afe->vote_handle[hdr->token] = rsp->client_handle;
 		afe->result.opcode = hdr->opcode;
-		afe->result.status = res->status;
+		afe->result.status = 0;
 		wake_up(&afe->wait);
 		break;
+	}
 	default:
 		break;
 	}
@@ -1884,6 +1899,9 @@ int q6afe_vote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
 	int ret = 0;
 	int pkt_size = APR_HDR_SIZE + sizeof(*vote_cfg);
 
+	if (hw_block_id >= ARRAY_SIZE(afe->vote_handle))
+		return -EINVAL;
+
 	void *p __free(kfree) = kzalloc(pkt_size, GFP_KERNEL);
 	if (!p)
 		return -ENOMEM;
@@ -1905,10 +1923,14 @@ int q6afe_vote_lpass_core_hw(struct device *dev, uint32_t hw_block_id,
 
 	ret = afe_apr_send_pkt(afe, pkt, NULL,
 			       AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST);
-	if (ret)
+	if (ret) {
 		dev_err(afe->dev, "AFE failed to vote (%d)\n", hw_block_id);
+		return ret;
+	}
 
-	return ret;
+	*client_handle = afe->vote_handle[hw_block_id];
+
+	return 0;
 }
 EXPORT_SYMBOL(q6afe_vote_lpass_core_hw);
 
