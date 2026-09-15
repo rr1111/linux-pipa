@@ -12,6 +12,7 @@
 #include <linux/device.h>
 #include <linux/mhi.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/pci.h>
 #include <linux/pm_runtime.h>
 #include <linux/timer.h>
@@ -452,6 +453,91 @@ static const struct mhi_pci_dev_info mhi_qcom_sdx55_info = {
 	.dma_data_width = 32,
 	.mru_default = 32768,
 	.sideband_wake = false,
+};
+
+static const struct mhi_channel_config mhi_qcom_sdx55m_fusion_channels[] = {
+	MHI_CHANNEL_CONFIG_UL_SBL(2, "SAHARA", 128, 1),
+	MHI_CHANNEL_CONFIG_DL_SBL(3, "SAHARA", 128, 1),
+	MHI_CHANNEL_CONFIG_UL(4, "DIAG", 64, 1),
+	MHI_CHANNEL_CONFIG_DL(5, "DIAG", 64, 3),
+	MHI_CHANNEL_CONFIG_UL(10, "EFS", 64, 1),
+	{
+		.num = 11,
+		.name = "EFS",
+		.num_elements = 64,
+		.event_ring = 1,
+		.dir = DMA_FROM_DEVICE,
+		.ee_mask = BIT(MHI_EE_AMSS),
+		.pollcfg = 0,
+		.doorbell = MHI_DB_BRST_DISABLE,
+		.lpm_notify = false,
+		.offload_channel = false,
+		.doorbell_mode_switch = false,
+		.wake_capable = true,
+	},
+	MHI_CHANNEL_CONFIG_UL(14, "QMI", 64, 1),
+	MHI_CHANNEL_CONFIG_DL(15, "QMI", 64, 2),
+	MHI_CHANNEL_CONFIG_UL(20, "IPCR", 64, 2),
+	MHI_CHANNEL_CONFIG_DL(21, "IPCR", 64, 2),
+	MHI_CHANNEL_CONFIG_HW_UL(100, "IP_HW0", 512, 4),
+	MHI_CHANNEL_CONFIG_HW_DL(101, "IP_HW0", 1024, 5),
+};
+
+static struct mhi_event_config mhi_qcom_sdx55m_fusion_events[] = {
+	MHI_EVENT_CONFIG_CTRL(0, 64),
+	MHI_EVENT_CONFIG_SW_DATA(1, 256),
+	MHI_EVENT_CONFIG_SW_DATA(2, 256),
+	MHI_EVENT_CONFIG_SW_DATA(3, 256),
+	MHI_EVENT_CONFIG_HW_DATA(4, 1024, 100),
+	MHI_EVENT_CONFIG_HW_DATA(5, 2048, 101),
+};
+
+static const struct mhi_controller_config mhi_qcom_sdx55m_fusion_config = {
+	.max_channels = 128,
+	.timeout_ms = 8000,
+	.num_channels = ARRAY_SIZE(mhi_qcom_sdx55m_fusion_channels),
+	.ch_cfg = mhi_qcom_sdx55m_fusion_channels,
+	.num_events = ARRAY_SIZE(mhi_qcom_sdx55m_fusion_events),
+	.event_cfg = mhi_qcom_sdx55m_fusion_events,
+};
+
+static const char * const sdx55m_image_table[] = {
+	[6] = "qcom/sdx55m/apps.mbn",
+	[8] = "qcom/sdx55m/qdsp6sw.mbn",
+	[16] = "qcom/sdx55m/efs1.bin",
+	[17] = "qcom/sdx55m/efs2.bin",
+	[20] = "qcom/sdx55m/efs3.bin",
+	[21] = "qcom/sdx55m/sbl1.mbn",
+	[23] = "qcom/sdx55m/aop.mbn",
+	[25] = "qcom/sdx55m/tz.mbn",
+	[29] = "qcom/sdx55m/acdb.mbn",
+	[33] = "qcom/sdx55m/hyp.mbn",
+	[34] = "qcom/sdx55m/mdmddr.mbn",
+	[36] = "qcom/sdx55m/multi_image_qti.mbn",
+	[37] = "qcom/sdx55m/multi_image.mbn",
+	[38] = "qcom/sdx55m/xbl_config.elf",
+	[40] = "qcom/sdx55m/apdp.mbn",
+	[41] = "qcom/sdx55m/devcfg.mbn",
+	[42] = "qcom/sdx55m/sec.elf",
+};
+
+static const struct mhi_sahara_fw_table sdx55m_sahara_fw = {
+	.image_table = sdx55m_image_table,
+	.table_size = ARRAY_SIZE(sdx55m_image_table),
+	.fw_folder = "sdx55m",
+	.non_streaming = true,
+};
+
+static const struct mhi_pci_dev_info mhi_qcom_sdx55m_fusion_info = {
+	.name = "qcom-sdx55m-fusion",
+	.fw = "qcom/sdx55m/sbl1.mbn",
+	.config = &mhi_qcom_sdx55m_fusion_config,
+	.sahara_fw = &sdx55m_sahara_fw,
+	.bar_num = MHI_PCI_DEFAULT_BAR_NUM,
+	.dma_data_width = 32,
+	.mru_default = 32768,
+	.sideband_wake = false,
+	.no_m3 = true,
 };
 
 static const struct mhi_pci_dev_info mhi_qcom_sdx35_info = {
@@ -1391,6 +1477,9 @@ static int mhi_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	struct mhi_controller *mhi_cntrl;
 	unsigned int dma_data_width;
 	int err;
+
+	if (of_device_is_compatible(pdev->dev.of_node, "pci17cb,0306"))
+		info = &mhi_qcom_sdx55m_fusion_info;
 
 	dev_info(&pdev->dev, "MHI PCI device found: %s\n", info->name);
 
