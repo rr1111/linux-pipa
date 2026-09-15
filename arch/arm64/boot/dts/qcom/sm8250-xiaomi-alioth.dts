@@ -952,6 +952,12 @@
 	};
 };
 
+&intc {
+	mbi-alias = <0x0 0x17a10000>;
+	mbi-ranges = <864 32>;
+	msi-controller;
+};
+
 &spi2 {
 	status = "okay";
 	pinctrl-names = "default";
@@ -1030,6 +1036,7 @@
 };
 
 &pcie2 {
+	msi-parent = <&intc>;
 	pinctrl-0 = <&pcie2_default_state &mdm2ap_default &ap2mdm_default>;
 	pinctrl-names = "default";
 	status = "okay";
