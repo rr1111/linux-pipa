@@ -55,6 +55,7 @@ struct mhi_pci_dev_info {
 	const char *fw;
 	const char *edl;
 	bool edl_trigger;
+	const struct mhi_sahara_fw_table *sahara_fw;
 	unsigned int bar_num;
 	unsigned int dma_data_width;
 	unsigned int vf_dma_data_width;
@@ -287,19 +288,6 @@ static const struct mhi_controller_config mhi_qcom_qdu100_config = {
 	.event_cfg = mhi_qcom_qdu100_events,
 };
 
-static const struct mhi_pci_dev_info mhi_qcom_qdu100_info = {
-	.name = "qcom-qdu100",
-	.fw = "qcom/qdu100/xbl_s.melf",
-	.edl_trigger = true,
-	.config = &mhi_qcom_qdu100_config,
-	.bar_num = MHI_PCI_DEFAULT_BAR_NUM,
-	.dma_data_width = 32,
-	.vf_dma_data_width = 40,
-	.sideband_wake = false,
-	.no_m3 = true,
-	.reset_on_remove = true,
-};
-
 static const char * const qdu100_image_table[] = {
 	[5] = "qcom/qdu100/uefi.elf",
 	[8] = "qcom/qdu100/qdsp6sw.mbn",
@@ -335,6 +323,20 @@ static const struct mhi_sahara_fw_table qdu100_sahara_fw = {
 	.table_size = ARRAY_SIZE(qdu100_image_table),
 	.fw_folder = "qdu100",
 	.non_streaming = false,
+};
+
+static const struct mhi_pci_dev_info mhi_qcom_qdu100_info = {
+	.name = "qcom-qdu100",
+	.fw = "qcom/qdu100/xbl_s.melf",
+	.edl_trigger = true,
+	.config = &mhi_qcom_qdu100_config,
+	.sahara_fw = &qdu100_sahara_fw,
+	.bar_num = MHI_PCI_DEFAULT_BAR_NUM,
+	.dma_data_width = 32,
+	.vf_dma_data_width = 40,
+	.sideband_wake = false,
+	.no_m3 = true,
+	.reset_on_remove = true,
 };
 
 static const struct mhi_channel_config mhi_qcom_sa8775p_channels[] = {
@@ -1418,6 +1420,7 @@ static int mhi_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	mhi_cntrl->iova_stop = (dma_addr_t)DMA_BIT_MASK(dma_data_width);
 	mhi_cntrl->fw_image = info->fw;
 	mhi_cntrl->edl_image = info->edl;
+	mhi_cntrl->sahara_fw = info->sahara_fw;
 
 	mhi_cntrl->read_reg = mhi_pci_read_reg;
 	mhi_cntrl->write_reg = mhi_pci_write_reg;
@@ -1448,14 +1451,6 @@ static int mhi_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		return err;
 
 	pci_set_drvdata(pdev, mhi_pdev);
-
-	/*
-	 * Provide Sahara firmware mapping. Sahara consumes it via
-	 * mhi_dev->mhi_cntrl->sahara_fw at probe time.
-	 */
-	if (info == &mhi_qcom_qdu100_info ||
-	    (info->name && !strcmp(info->name, "qcom-qdu100")))
-		mhi_cntrl->sahara_fw = &qdu100_sahara_fw;
 
 	/* Have stored pci confspace at hand for restore in sudden PCI error.
 	 * cache the state locally and discard the PCI core one.
