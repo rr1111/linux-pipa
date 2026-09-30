@@ -666,8 +666,6 @@ void dpu_encoder_update_topology(struct drm_encoder *drm_enc,
 	struct drm_framebuffer *fb;
 	struct drm_dsc_config *dsc;
 
-	int i;
-
 	if (dpu_enc->phys_encs[0])
 		topology->num_intf = 1;
 
