@@ -426,13 +426,8 @@ static int s5k5e9_set_ctrl(struct v4l2_ctrl *ctrl)
 	struct s5k5e9 *s5k5e9 = container_of(ctrl->handler,
 						 struct s5k5e9, ctrl_handler);
 	struct i2c_client *client = v4l2_get_subdevdata(&s5k5e9->sd);
-	struct v4l2_mbus_framefmt *format;
-	struct v4l2_subdev_state *state;
 	u32 exposure_max;
 	int ret;
-
-	state = v4l2_subdev_get_locked_active_state(&s5k5e9->sd);
-	format = v4l2_subdev_state_get_format(state, 0);
 
 	/* Propagate change of current control to all related controls */
 	if (ctrl->id == V4L2_CID_VBLANK) {
